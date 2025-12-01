@@ -1,4 +1,4 @@
-import { loadEnv, defineConfig } from '@medusajs/framework/utils'
+import { loadEnv, defineConfig, Modules} from '@medusajs/framework/utils'
 
 loadEnv(process.env.NODE_ENV || 'development', process.cwd())
 
@@ -18,28 +18,51 @@ module.exports = defineConfig({
       | "server",
     redisUrl : process.env.REDIS_URL,
   },
-  modules: [
-    {
-      resolve: "@medusajs/cache-redis", 
+  modules: {
+    [Modules.CACHE]: {
+      resolve: "@medusajs/cache-redis",
       options: { 
         redisUrl: process.env.REDIS_URL,
       },
     },
-    {
-      resolve: "@medusajs/event-bus-redis", 
+    [Modules.EVENT_BUS]: {
+      resolve: "@medusajs/event-bus-redis",
       options: { 
         redisUrl: process.env.REDIS_URL,
       },
     },
-     {
+    [Modules.WORKFLOW_ENGINE]: {
       resolve: "@medusajs/medusa/workflow-engine-redis",
       options: {
         redis: {
           url: process.env.REDIS_URL,
         },
       },
-     },
-  ],
+    },
+  },
+  
+  // modules: [
+  //   {
+  //     resolve: "@medusajs/cache-redis", 
+  //     options: { 
+  //       redisUrl: process.env.REDIS_URL,
+  //     },
+  //   },
+  //   {
+  //     resolve: "@medusajs/event-bus-redis", 
+  //     options: { 
+  //       redisUrl: process.env.REDIS_URL,
+  //     },
+  //   },
+  //    {
+  //     resolve: "@medusajs/medusa/workflow-engine-redis",
+  //     options: {
+  //       redis: {
+  //         url: process.env.REDIS_URL,
+  //       },
+  //     },
+  //    },
+  // ],
   admin: {
     disable: process.env.DISABLE_MEDUSA_ADMIN === "true",
     backendUrl: process.env.MEDUSA_BACKEND_URL,
