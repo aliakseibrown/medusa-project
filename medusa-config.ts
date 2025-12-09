@@ -23,6 +23,20 @@ module.exports = defineConfig({
 
   modules: [
     {
+      resolve: "@medusajs/payment",
+      options: {
+        providers: [
+          {
+            resolve: "@medusajs/payment-stripe",
+            id: "stripe",
+            options: {
+              apiKey: process.env.STRIPE_API_KEY,
+            },
+          },
+        ],
+      },
+    },
+    {
       resolve: "@medusajs/file",
       options: {
         providers: [
@@ -38,13 +52,13 @@ module.exports = defineConfig({
               endpoint: process.env.S3_ENDPOINT,
               additional_client_config: {
                 forcePathStyle: true, 
+                s3ForcePathStyle: true,
               },
             },
           },
         ],
       },
     },
-    // -----------------------------------------
     {
       resolve: "@medusajs/medusa/cache-redis",
       options: { 
