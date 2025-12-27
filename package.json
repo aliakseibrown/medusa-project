@@ -29,7 +29,8 @@
     "@medusajs/event-bus-redis": "^2.11.3",
     "@medusajs/file-s3": "^2.11.3",
     "@medusajs/framework": "2.11.3",
-    "@medusajs/medusa": "2.11.3"
+    "@medusajs/medusa": "2.11.3",
+    "resend": "^6.6.0"
   },
   "devDependencies": {
     "@medusajs/test-utils": "2.11.3",
