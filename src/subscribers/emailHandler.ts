@@ -9,11 +9,12 @@ const resend = new Resend(process.env.RESEND_API_KEY)
 
 // --- HELPER: Format Money ---
 const formatCurrency = (amount: number, currency: string) => {
-  if (!amount && amount !== 0) return "-"
-  return new Intl.NumberFormat('en-US', {
+  // Ensure we have a valid number, default to 0 if null/undefined
+  const safeAmount = amount || 0
+  return new Intl.NumberFormat('de-DE', {
     style: 'currency',
     currency: currency.toUpperCase(),
-  }).format(amount)
+  }).format(safeAmount)
 }
 
 // --- HELPER: Base Email Layout (Wrapper) ---
@@ -38,7 +39,8 @@ const wrapHtml = (content: string) => `
 `
 
 // --- TEMPLATE: Order Placed ---
-const generateOrderHtml = (order: any) => {
+// Now accepts 'totals' object with pre-calculated values
+const generateOrderHtml = (order: any, totals: any) => {
   const itemsHtml = order.items.map((item: any) => {
     const image = item.thumbnail || item.variant?.product?.thumbnail || "";
     return `
@@ -82,29 +84,24 @@ const generateOrderHtml = (order: any) => {
       <table style="width: 100%; font-family: monospace;">
         <tr>
           <td style="padding-bottom: 8px;">Subtotal</td>
-          <td style="text-align: right;">${formatCurrency(order.subtotal, order.currency_code)}</td>
+          <td style="text-align: right;">${formatCurrency(totals.subtotal, order.currency_code)}</td>
         </tr>
         <tr>
           <td style="padding-bottom: 8px;">Shipping</td>
-          <td style="text-align: right;">${formatCurrency(order.shipping_total, order.currency_code)}</td>
+          <td style="text-align: right;">${formatCurrency(totals.shipping, order.currency_code)}</td>
         </tr>
-        ${order.tax_total > 0 ? `
-        <tr>
-          <td style="padding-bottom: 8px;">Tax</td>
-          <td style="text-align: right;">${formatCurrency(order.tax_total, order.currency_code)}</td>
-        </tr>` : ''}
         <tr style="font-weight: bold; font-size: 16px; border-top: 1px solid #ccc;">
           <td style="padding-top: 12px;">[ TOTAL ]</td>
-          <td style="text-align: right; padding-top: 12px;">${formatCurrency(order.total, order.currency_code)}</td>
+          <td style="text-align: right; padding-top: 12px;">${formatCurrency(totals.total, order.currency_code)}</td>
         </tr>
       </table>
     </div>
   `)
 }
 
-// --- TEMPLATE: Shipment Created ---
 const generateShipmentHtml = (fulfillment: any) => {
-  const tracking = fulfillment.tracking_links?.[0]
+  const tracking = fulfillment.labels?.[0]
+  
   return wrapHtml(`
     <div style="margin-bottom: 40px; border-bottom: 2px solid #000; padding-bottom: 20px;">
       <h1 style="margin: 0; font-size: 24px; text-transform: uppercase; letter-spacing: 1px;">[ SHIPPED ]</h1>
@@ -115,51 +112,38 @@ const generateShipmentHtml = (fulfillment: any) => {
       <p style="margin: 0 0 10px 0; font-family: monospace; font-size: 14px; color: #666;">TRACKING NUMBER</p>
       <p style="margin: 0 0 20px 0; font-size: 18px; font-weight: bold;">${tracking?.tracking_number || "N/A"}</p>
       
-      <a href="${tracking?.url || '#'}" style="display: inline-block; background: #000; color: #fff; padding: 12px 24px; text-decoration: none; text-transform: uppercase; font-size: 12px; font-weight: bold; letter-spacing: 1px;">
+      <a href="${tracking?.tracking_url || '#'}" style="display: inline-block; background: #000; color: #fff; padding: 12px 24px; text-decoration: none; text-transform: uppercase; font-size: 12px; font-weight: bold; letter-spacing: 1px;">
         Track Package
       </a>
     </div>
   `)
 }
 
-// --- TEMPLATE: Order Canceled ---
 const generateCanceledHtml = (order: any) => {
-  return wrapHtml(`
-    <div style="margin-bottom: 40px; border-bottom: 2px solid #000; padding-bottom: 20px;">
-      <h1 style="margin: 0; font-size: 24px; text-transform: uppercase; letter-spacing: 1px;">[ CANCELED ]</h1>
-      <p style="margin: 5px 0 0; color: #666; font-size: 14px;">Order #${order.display_id}</p>
-    </div>
-    
-    <p style="font-size: 16px; line-height: 1.5;">
-      Hi ${order.shipping_address?.first_name || "there"},<br><br>
-      Your order <strong>#${order.display_id}</strong> has been canceled. 
-      Any payment made has been refunded.
-    </p>
-
-    <div style="margin-top: 30px; padding: 15px; background: #f9f9f9; border-left: 4px solid #000;">
-      <p style="margin: 0; font-size: 14px; color: #444;">If you have any questions or believe this was a mistake, please reply to this email.</p>
-    </div>
-  `)
+    return wrapHtml(`
+      <div style="margin-bottom: 40px; border-bottom: 2px solid #000; padding-bottom: 20px;">
+        <h1 style="margin: 0; font-size: 24px; text-transform: uppercase; letter-spacing: 1px;">[ CANCELED ]</h1>
+        <p style="margin: 5px 0 0; color: #666; font-size: 14px;">Order #${order.display_id}</p>
+      </div>
+      <p style="font-size: 16px; line-height: 1.5;">
+        Hi ${order.shipping_address?.first_name || "there"},<br><br>
+        Your order <strong>#${order.display_id}</strong> has been canceled. 
+      </p>
+    `)
 }
-
-// --- TEMPLATE: Customer Created (Welcome) ---
 const generateWelcomeHtml = (customer: any) => {
-  return wrapHtml(`
-    <div style="margin-bottom: 40px; border-bottom: 2px solid #000; padding-bottom: 20px;">
-      <h1 style="margin: 0; font-size: 24px; text-transform: uppercase; letter-spacing: 1px;">[ WELCOME ]</h1>
-      <p style="margin: 5px 0 0; color: #666; font-size: 14px;">Welcome to the club.</p>
-    </div>
-    
-    <p style="font-size: 16px; line-height: 1.5; margin-bottom: 30px;">
-      Hi ${customer.first_name || "Customer"},<br><br>
-      Thank you for creating an account with us. You can now track your orders and checkout faster.
-    </p>
-
-    <a href="${process.env.STORE_URL || '#'}" style="display: inline-block; border: 1px solid #000; color: #000; padding: 12px 24px; text-decoration: none; text-transform: uppercase; font-size: 12px; font-weight: bold; letter-spacing: 1px; transition: all 0.2s;">
-      Visit Store
-    </a>
-  `)
+    return wrapHtml(`
+      <div style="margin-bottom: 40px; border-bottom: 2px solid #000; padding-bottom: 20px;">
+        <h1 style="margin: 0; font-size: 24px; text-transform: uppercase; letter-spacing: 1px;">[ WELCOME ]</h1>
+        <p style="margin: 5px 0 0; color: #666; font-size: 14px;">Welcome to the club.</p>
+      </div>
+      <p style="font-size: 16px; line-height: 1.5; margin-bottom: 30px;">
+        Hi ${customer.first_name || "Customer"},<br><br>
+        Thank you for creating an account with us.
+      </p>
+    `)
 }
+
 
 // ====================================================
 // MAIN HANDLER
@@ -178,12 +162,13 @@ export default async function emailHandler({
       entity: "order",
       fields: [
         "*", 
-        "total", "subtotal", "tax_total", "shipping_total", 
         "currency_code", "display_id", "email",
         "items.*", 
         "items.variant.*",
         "items.variant.product.*", 
         "shipping_address.*", 
+        // ADDED: shipping_methods to calculate total manually
+        "shipping_methods.*",
         "customer.*", 
         "metadata"
       ],
@@ -192,7 +177,28 @@ export default async function emailHandler({
     
     if (!order) return
 
-    // Customer Name Update Logic
+    // --- MANUAL TOTALS CALCULATION (Fixes missing fields) ---
+    // 1. Calculate Subtotal (Sum of item prices)
+    const calculatedSubtotal = order.items.reduce((acc: number, item: any) => {
+        return acc + (item.unit_price * item.quantity)
+    }, 0)
+
+    // 2. Calculate Shipping (Sum of shipping methods)
+    const calculatedShipping = order.shipping_methods?.reduce((acc: number, method: any) => {
+        return acc + method.amount
+    }, 0) || 0
+
+    // 3. Grand Total
+    const calculatedTotal = calculatedSubtotal + calculatedShipping
+
+    const totals = {
+        subtotal: calculatedSubtotal,
+        shipping: calculatedShipping,
+        total: calculatedTotal
+    }
+    // --------------------------------------------------------
+
+    // Sync Customer
     const updateData: any = {}
     if (order.shipping_address?.first_name && (!order.customer.first_name || order.customer.first_name === "Guest")) {
        updateData.first_name = order.shipping_address.first_name
@@ -203,7 +209,7 @@ export default async function emailHandler({
         await customerService.updateCustomers(order.customer.id, updateData)
     }
 
-    // Newsletter Logic
+    // Newsletter
     if (order.metadata?.newsletter_subscribed && process.env.RESEND_AUDIENCE_ID) {
         try {
             await resend.contacts.create({
@@ -223,7 +229,7 @@ export default async function emailHandler({
             from: fromEmail,
             to: order.email,
             subject: `Order Confirmed #${order.display_id}`,
-            html: generateOrderHtml(order)
+            html: generateOrderHtml(order, totals) // Pass the calculated totals
         })
         console.log(`[Resend] Order Confirmation sent to ${order.email}`)
     } catch (err) {
@@ -231,12 +237,12 @@ export default async function emailHandler({
     }
   }
 
-  // 2. SHIPMENT CREATED
-  if (name === "shipment.created") {
-    const { data: [fulfillment] } = await query.graph({
-      entity: "fulfillment",
-      fields: ["*", "tracking_links.*", "order.email", "order.display_id"],
-      filters: { id: data.id },
+  // 2. SHIPMENT CREATED (Keep logic)
+    if (name === "shipment.created") {
+        const { data: [fulfillment] } = await query.graph({
+        entity: "fulfillment",
+        fields: ["*", "labels.*", "order.email", "order.display_id"],
+        filters: { id: data.id },
     })
 
     if (!fulfillment?.order) return
@@ -248,19 +254,19 @@ export default async function emailHandler({
         subject: `Order #${fulfillment.order.display_id} Shipped`,
         html: generateShipmentHtml(fulfillment)
       })
+      console.log(`[Resend] Shipment email sent to ${fulfillment.order.email}`)
     } catch (err) {
       console.error("[Resend] Shipment Email Failed:", err.message)
     }
   }
 
-  // 3. ORDER CANCELED
+  // 3. ORDER CANCELED (Keep logic)
   if (name === "order.canceled") {
     const { data: [order] } = await query.graph({
       entity: "order",
       fields: ["email", "display_id", "shipping_address.first_name"],
       filters: { id: data.id },
     })
-
     if (!order) return
 
     try {
@@ -270,20 +276,18 @@ export default async function emailHandler({
         subject: `Order #${order.display_id} Canceled`,
         html: generateCanceledHtml(order)
       })
-      console.log(`[Resend] Cancellation email sent to ${order.email}`)
     } catch (err) {
       console.error("[Resend] Cancellation Email Failed:", err.message)
     }
   }
 
-  // 4. CUSTOMER CREATED
+  // 4. CUSTOMER CREATED (Keep logic)
   if (name === "customer.created") {
     const { data: [customer] } = await query.graph({
       entity: "customer",
       fields: ["email", "first_name"],
       filters: { id: data.id },
     })
-
     if (!customer) return
 
     try {
@@ -293,14 +297,12 @@ export default async function emailHandler({
         subject: `Welcome to Our Store`,
         html: generateWelcomeHtml(customer)
       })
-      console.log(`[Resend] Welcome email sent to ${customer.email}`)
     } catch (err) {
       console.error("[Resend] Welcome Email Failed:", err.message)
     }
   }
 }
 
-// Subscribe to ALL events
 export const config: SubscriberConfig = {
   event: [
     "order.placed", 
