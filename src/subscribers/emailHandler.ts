@@ -9,7 +9,6 @@ const resend = new Resend(process.env.RESEND_API_KEY)
 
 // --- HELPER: Format Money ---
 const formatCurrency = (amount: number, currency: string) => {
-  // Ensure we have a valid number, default to 0 if null/undefined
   const safeAmount = amount || 0
   return new Intl.NumberFormat('de-DE', {
     style: 'currency',
@@ -39,7 +38,6 @@ const wrapHtml = (content: string) => `
 `
 
 // --- TEMPLATE: Order Placed ---
-// Now accepts 'totals' object with pre-calculated values
 const generateOrderHtml = (order: any, totals: any) => {
   const itemsHtml = order.items.map((item: any) => {
     const image = item.thumbnail || item.variant?.product?.thumbnail || "";
@@ -99,6 +97,7 @@ const generateOrderHtml = (order: any, totals: any) => {
   `)
 }
 
+// --- TEMPLATE: Shipment Created ---
 const generateShipmentHtml = (fulfillment: any) => {
   const tracking = fulfillment.labels?.[0]
   
@@ -119,6 +118,28 @@ const generateShipmentHtml = (fulfillment: any) => {
   `)
 }
 
+// --- TEMPLATE: Shipment Delivered (NEW) ---
+const generateDeliveredHtml = (fulfillment: any) => {
+    return wrapHtml(`
+      <div style="margin-bottom: 40px; border-bottom: 2px solid #000; padding-bottom: 20px;">
+        <h1 style="margin: 0; font-size: 24px; text-transform: uppercase; letter-spacing: 1px;">[ DELIVERED ]</h1>
+        <p style="margin: 5px 0 0; color: #666; font-size: 14px;">Order #${fulfillment.order.display_id}</p>
+      </div>
+  
+      <p style="font-size: 16px; line-height: 1.5; margin-bottom: 30px;">
+        Hi ${fulfillment.order.shipping_address?.first_name || "there"},<br><br>
+        Your package has been delivered! We hope you enjoy your purchase.
+      </p>
+  
+      <div style="text-align: center; margin-top: 40px;">
+        <a href="${process.env.STORE_URL || '#'}" style="text-decoration: none; font-size: 14px; color: #000; border-bottom: 1px solid #000; padding-bottom: 2px;">
+           Visit Store
+        </a>
+      </div>
+    `)
+  }
+
+// --- TEMPLATE: Canceled ---
 const generateCanceledHtml = (order: any) => {
     return wrapHtml(`
       <div style="margin-bottom: 40px; border-bottom: 2px solid #000; padding-bottom: 20px;">
@@ -131,6 +152,8 @@ const generateCanceledHtml = (order: any) => {
       </p>
     `)
 }
+
+// --- TEMPLATE: Welcome ---
 const generateWelcomeHtml = (customer: any) => {
     return wrapHtml(`
       <div style="margin-bottom: 40px; border-bottom: 2px solid #000; padding-bottom: 20px;">
@@ -167,7 +190,6 @@ export default async function emailHandler({
         "items.variant.*",
         "items.variant.product.*", 
         "shipping_address.*", 
-        // ADDED: shipping_methods to calculate total manually
         "shipping_methods.*",
         "customer.*", 
         "metadata"
@@ -177,26 +199,20 @@ export default async function emailHandler({
     
     if (!order) return
 
-    // --- MANUAL TOTALS CALCULATION (Fixes missing fields) ---
-    // 1. Calculate Subtotal (Sum of item prices)
+    // Calculate Totals
     const calculatedSubtotal = order.items.reduce((acc: number, item: any) => {
         return acc + (item.unit_price * item.quantity)
     }, 0)
 
-    // 2. Calculate Shipping (Sum of shipping methods)
     const calculatedShipping = order.shipping_methods?.reduce((acc: number, method: any) => {
         return acc + method.amount
     }, 0) || 0
 
-    // 3. Grand Total
-    const calculatedTotal = calculatedSubtotal + calculatedShipping
-
     const totals = {
         subtotal: calculatedSubtotal,
         shipping: calculatedShipping,
-        total: calculatedTotal
+        total: calculatedSubtotal + calculatedShipping
     }
-    // --------------------------------------------------------
 
     // Sync Customer
     const updateData: any = {}
@@ -229,7 +245,7 @@ export default async function emailHandler({
             from: fromEmail,
             to: order.email,
             subject: `Order Confirmed #${order.display_id}`,
-            html: generateOrderHtml(order, totals) // Pass the calculated totals
+            html: generateOrderHtml(order, totals)
         })
         console.log(`[Resend] Order Confirmation sent to ${order.email}`)
     } catch (err) {
@@ -237,8 +253,8 @@ export default async function emailHandler({
     }
   }
 
-  // 2. SHIPMENT CREATED (Keep logic)
-    if (name === "shipment.created") {
+  // 2. SHIPMENT CREATED
+  if (name === "shipment.created") {
         const { data: [fulfillment] } = await query.graph({
         entity: "fulfillment",
         fields: ["*", "labels.*", "order.email", "order.display_id"],
@@ -260,7 +276,36 @@ export default async function emailHandler({
     }
   }
 
-  // 3. ORDER CANCELED (Keep logic)
+  // 3. FULFILLMENT DELIVERED (NEW)
+  if (name === "fulfillment.delivered") {
+    // Note: data.id here refers to the fulfillment ID
+    const { data: [fulfillment] } = await query.graph({
+      entity: "fulfillment",
+      fields: [
+        "*", 
+        "order.email", 
+        "order.display_id",
+        "order.shipping_address.first_name" // Fetch first name for greeting
+      ],
+      filters: { id: data.id },
+    })
+
+    if (!fulfillment?.order) return
+
+    try {
+      await resend.emails.send({
+        from: fromEmail,
+        to: fulfillment.order.email,
+        subject: `Order #${fulfillment.order.display_id} Delivered`,
+        html: generateDeliveredHtml(fulfillment)
+      })
+      console.log(`[Resend] Delivery email sent to ${fulfillment.order.email}`)
+    } catch (err) {
+      console.error("[Resend] Delivery Email Failed:", err.message)
+    }
+  }
+
+  // 4. ORDER CANCELED
   if (name === "order.canceled") {
     const { data: [order] } = await query.graph({
       entity: "order",
@@ -281,7 +326,7 @@ export default async function emailHandler({
     }
   }
 
-  // 4. CUSTOMER CREATED (Keep logic)
+  // 5. CUSTOMER CREATED
   if (name === "customer.created") {
     const { data: [customer] } = await query.graph({
       entity: "customer",
@@ -307,6 +352,7 @@ export const config: SubscriberConfig = {
   event: [
     "order.placed", 
     "shipment.created", 
+    "fulfillment.delivered", // Added listener here
     "order.canceled", 
     "customer.created"
   ],
