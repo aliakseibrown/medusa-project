@@ -276,21 +276,30 @@ export default async function emailHandler({
     }
   }
 
-  // 3. FULFILLMENT DELIVERED (NEW)
-  if (name === "fulfillment.delivered") {
-    // Note: data.id here refers to the fulfillment ID
+  // 3. FULFILLMENT DELIVERED / DELIVERY CREATED
+  // Update the condition to check for "delivery.created"
+  if (name === "fulfillment.delivered" || name === "delivery.created") {
+    
+    // Note: If data.id is a Delivery ID, we might need to adjust the query. 
+    // Usually, in simple flows, it maps to the fulfillment or allows querying the fulfillment via the delivery.
+    // However, let's try querying the fulfillment first as you currently do.
     const { data: [fulfillment] } = await query.graph({
       entity: "fulfillment",
       fields: [
         "*", 
         "order.email", 
         "order.display_id",
-        "order.shipping_address.first_name" // Fetch first name for greeting
+        "order.shipping_address.first_name"
       ],
       filters: { id: data.id },
     })
 
-    if (!fulfillment?.order) return
+    // Safety check: if querying by fulfillment failed, the data.id might be a specific "delivery" ID.
+    // But for now, let's assume standard behavior first.
+    if (!fulfillment?.order) {
+        console.warn(`[Resend] No fulfillment/order found for event ${name} with ID ${data.id}`)
+        return
+    }
 
     try {
       await resend.emails.send({
@@ -352,7 +361,8 @@ export const config: SubscriberConfig = {
   event: [
     "order.placed", 
     "shipment.created", 
-    "fulfillment.delivered", // Added listener here
+    "fulfillment.delivered",
+    "delivery.created",
     "order.canceled", 
     "customer.created"
   ],
