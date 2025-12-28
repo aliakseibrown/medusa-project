@@ -2,121 +2,129 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework";
 import { ContainerRegistrationKeys } from "@medusajs/utils";
 
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
-  const query = req.scope.resolve(ContainerRegistrationKeys.QUERY);
+  console.log("Starting Tax Export...");
 
-  // 1. Fetch Orders (Completed/Captured only)
-  const { data: orders } = await query.graph({
-    entity: "order",
-    fields: [
-      "display_id",
-      "created_at",
-      "currency_code",
-      "email",
-      "region.name",
-      "shipping_address.country_code",
-      // Totals
-      "total",
-      "subtotal",
-      "tax_total",
-      // Items & Tax Lines
-      "items.title",
-      "items.quantity",
-      "items.unit_price",
-      "items.tax_total",
-      "items.tax_lines.rate",
-      "items.tax_lines.code",
-      // Shipping & Tax Lines
-      "shipping_methods.name",
-      "shipping_methods.amount",
-      "shipping_methods.tax_total",
-      "shipping_methods.tax_lines.rate"
-    ],
-    filters: {
-      payment_status: "captured", 
-    },
-  });
+  try {
+    const query = req.scope.resolve(ContainerRegistrationKeys.QUERY);
 
-  // 2. Build CSV Rows
-  const csvRows: string[] = [];
-  
-  // -- Headers --
-  csvRows.push([
-    "Order ID",
-    "Date",
-    "Customer Email",
-    "Country",
-    "Currency",
-    "Type", // Item or Shipping
-    "Description",
-    "Quantity",
-    "Unit Price (Net)",
-    "Tax Rate (%)",
-    "Tax Amount",
-    "Total (Gross)"
-  ].join(","));
+    // 1. Fetch Orders WITHOUT the crashing filter
+    const { data: orders } = await query.graph({
+      entity: "order",
+      fields: [
+        "display_id",
+        "created_at",
+        "currency_code",
+        "email",
+        "shipping_address.country_code",
+        "total",
+        "subtotal",
+        "tax_total",
+        // Fetch Payment status details
+        "payment_collections.status",
+        "payment_collections.amount",
+        // Items
+        "items.title",
+        "items.quantity",
+        "items.unit_price",
+        "items.tax_total",
+        "items.tax_lines.*",
+        // Shipping
+        "shipping_methods.name",
+        "shipping_methods.amount",
+        "shipping_methods.tax_total",
+        "shipping_methods.tax_lines.*"
+      ],
+      // REMOVED "filters: { payment_status: ... }" to prevent crash
+    });
 
-  for (const order of orders) {
-    const date = new Date(order.created_at).toISOString().split('T')[0];
-    const country = order.shipping_address?.country_code?.toUpperCase() || "N/A";
-    const currency = order.currency_code.toUpperCase();
+    console.log(`Found ${orders.length} total orders. Filtering for paid ones...`);
 
-    // -- Process Product Items --
-    for (const item of order.items) {
-      // Calculate implied tax rate from the first tax line (if multiple, this logic needs expanding)
-      const taxRate = item.tax_lines?.[0]?.rate || 0;
-      const unitPrice = item.unit_price || 0;
-      const taxAmount = item.tax_total || 0;
-      const total = (unitPrice * item.quantity) + taxAmount;
+    // 2. Build CSV Rows
+    const csvRows: string[] = [];
+    
+    csvRows.push([
+      "Order ID", "Date", "Customer Email", "Country", "Currency", 
+      "Type", "Description", "Quantity", "Unit Price", "Tax Rate", "Tax Amount", "Total"
+    ].join(","));
 
-      csvRows.push([
-        order.display_id,
-        date,
-        order.email,
-        country,
-        currency,
-        "Item",
-        `"${item.title.replace(/"/g, '""')}"`, // Escape quotes
-        item.quantity,
-        (unitPrice).toFixed(2),
-        taxRate, 
-        (taxAmount).toFixed(2),
-        (total).toFixed(2)
-      ].join(","));
-    }
+    for (const order of orders) {
+      // --- FILTERING LOGIC ---
+      // In Medusa v2, we check the payment_collections to see if it's paid.
+      // We look for any collection that is 'completed' or 'captured'.
+      const isPaid = order.payment_collections?.some((pc: any) => 
+        pc.status === 'captured' || pc.status === 'completed'
+      );
 
-    // -- Process Shipping --
-    if (order.shipping_methods) {
-      for (const method of order.shipping_methods) {
-        const taxRate = method.tax_lines?.[0]?.rate || 0;
-        const price = method.amount || 0;
-        const tax = method.tax_total || 0;
-        const total = price + tax;
+      // Skip this order if it isn't paid
+      if (!isPaid) continue; 
+      // -----------------------
 
-        csvRows.push([
-          order.display_id,
-          date,
-          order.email,
-          country,
-          currency,
-          "Shipping",
-          `"${method.name}"`,
-          1,
-          (price).toFixed(2),
-          taxRate,
-          (tax).toFixed(2),
-          (total).toFixed(2)
-        ].join(","));
+      const date = new Date(order.created_at).toISOString().split('T')[0];
+      const country = order.shipping_address?.country_code?.toUpperCase() || "N/A";
+      const currency = order.currency_code.toUpperCase();
+
+      // Process Items
+      if (order.items) {
+        for (const item of order.items) {
+          const taxLine = item.tax_lines && item.tax_lines.length > 0 ? item.tax_lines[0] : null;
+          const taxRate = taxLine ? taxLine.rate : 0;
+          const unitPrice = item.unit_price || 0;
+          const taxAmount = item.tax_total || 0; 
+          const total = (unitPrice * item.quantity) + taxAmount;
+
+          csvRows.push([
+            order.display_id,
+            date,
+            order.email || "Guest",
+            country,
+            currency,
+            "Item",
+            `"${(item.title || "").replace(/"/g, '""')}"`,
+            item.quantity,
+            unitPrice.toFixed(2),
+            taxRate, 
+            taxAmount.toFixed(2),
+            total.toFixed(2)
+          ].join(","));
+        }
+      }
+
+      // Process Shipping
+      if (order.shipping_methods) {
+        for (const method of order.shipping_methods) {
+          const taxLine = method.tax_lines && method.tax_lines.length > 0 ? method.tax_lines[0] : null;
+          const taxRate = taxLine ? taxLine.rate : 0;
+          const price = method.amount || 0;
+          const tax = method.tax_total || 0;
+          const total = price + tax;
+
+          csvRows.push([
+            order.display_id,
+            date,
+            order.email || "Guest",
+            country,
+            currency,
+            "Shipping",
+            `"${(method.name || "Shipping").replace(/"/g, '""')}"`,
+            1,
+            price.toFixed(2),
+            taxRate,
+            tax.toFixed(2),
+            total.toFixed(2)
+          ].join(","));
+        }
       }
     }
+
+    // 3. Send Response
+    const csvString = csvRows.join("\n");
+    
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", `attachment; filename=tax_report.csv`);
+    res.send(csvString);
+
+  } catch (error) {
+    console.error("CRITICAL ERROR IN EXPORT:", error);
+    res.status(500).json({ error: error.message });
   }
-
-  // 3. Send Response
-  const csvString = csvRows.join("\n");
-  
-  // Date for filename
-  const filename = `tax_report_${new Date().toISOString().split('T')[0]}.csv`;
-
-  res.setHeader("Content-Type", "text/csv");
-  res.setHeader("Content-Disposition", `attachment; filename=${filename}`);
-  res.send(csvString);
 };
